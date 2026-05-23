@@ -503,34 +503,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Current Google Ads data (for price-change projection) */}
-        <div className="card">
-          <SectionHeader accent="var(--violet)">Current Google Ads data <span style={{ color: "var(--text-faint)", fontWeight: 400, marginLeft: 6, fontSize: 11 }}>(no rebills — your baseline)</span></SectionHeader>
-          <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 14, lineHeight: 1.5 }}>
-            Paste in what Google Ads shows you NOW at your current price (without rebills). The dashboard will project what your CPA/CPC will be at the new price below.
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16, marginBottom: 16 }}>
-            <Field label="Current store price" value={inputs.currentPrice} onChange={(v) => u("currentPrice", v)} prefix="$" step="0.01" />
-            <Field label="Current CPA" value={inputs.currentCPA} onChange={(v) => u("currentCPA", v)} prefix="$" step="0.01" hint="Cost / conversion" />
-            <Field label="Current CPC" value={inputs.currentCPC} onChange={(v) => u("currentCPC", v)} prefix="$" step="0.01" hint="Cost / click" />
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
-            <Field
-              label="CVR elasticity"
-              value={inputs.cvrElasticity}
-              onChange={(v) => u("cvrElasticity", Math.max(0, Math.min(2, v)))}
-              step="0.1"
-              hint="How much CVR rises when price drops · 0 = none · 0.5 = moderate · 1 = strong"
-            />
-            <Field
-              label="CPC elasticity"
-              value={inputs.cpcElasticity}
-              onChange={(v) => u("cpcElasticity", Math.max(0, Math.min(1, v)))}
-              step="0.05"
-              hint="How much CPC drops with price · 0.1 = gentle · 0.3 = steep"
-            />
-          </div>
-        </div>
 
         {/* ========== CALCULATE BUTTON ========== */}
 
@@ -821,115 +793,201 @@ export default function App() {
 
         {/* ========== PRICE CHANGE PROJECTION ========== */}
 
-        {r.projection_cvr && (
-          <div style={{
-            position: "relative",
-            background: "radial-gradient(ellipse at top right, rgba(139, 92, 246, 0.12), transparent 70%), radial-gradient(ellipse at bottom left, var(--green-glow), transparent 70%), var(--bg-elev)",
-            borderRadius: 20,
-            padding: 28,
-            border: "1px solid rgba(139, 92, 246, 0.2)",
-            marginBottom: 16,
-          }}>
-            <SectionHeader accent="var(--violet)">
-              Price change projection
-              <span style={{ color: "var(--text-faint)", fontWeight: 400, marginLeft: 6, fontSize: 11 }}>
-                · what Google likely gives at the new price
-              </span>
-            </SectionHeader>
-            <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 18, lineHeight: 1.5 }}>
-              Based on the elasticity assumption that lower prices win more conversions and cheaper clicks. Estimates, not guarantees.
-            </div>
+        <div style={{
+          position: "relative",
+          background: "radial-gradient(ellipse at top right, rgba(139, 92, 246, 0.12), transparent 70%), radial-gradient(ellipse at bottom left, var(--green-glow), transparent 70%), var(--bg-elev)",
+          borderRadius: 20,
+          padding: 28,
+          border: "1px solid rgba(139, 92, 246, 0.2)",
+          marginBottom: 16,
+        }}>
+          <SectionHeader accent="var(--violet)">
+            Price change projection
+            <span style={{ color: "var(--text-faint)", fontWeight: 400, marginLeft: 6, fontSize: 11 }}>
+              · what Google likely gives at the new price
+            </span>
+          </SectionHeader>
+          <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 18, lineHeight: 1.5 }}>
+            Type your real Google Ads numbers below (current price, CPA, CPC — no rebills). The right side projects what they'll likely become at the new price. Elasticity = how much you expect CVR/CPC to respond to price changes.
+          </div>
 
-            {/* Side-by-side comparison */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 18 }}>
-              {/* CURRENT */}
-              <div style={{
-                background: "var(--bg-elev-2)",
-                border: "1px solid var(--border)",
-                borderRadius: 14,
-                padding: 20,
-              }}>
-                <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>
-                  Current · no rebills
-                </div>
-                <div style={{ fontSize: 24, fontWeight: 700, color: "var(--text)", letterSpacing: "-0.02em", marginBottom: 12 }}>
-                  {fmt(r.projection_cvr.currentPrice)}
-                </div>
-                <div style={{ display: "grid", gap: 8, fontSize: 13, fontFamily: "'JetBrains Mono', monospace" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ color: "var(--text-faint)" }}>CPA</span>
-                    <span style={{ color: "var(--text)", fontWeight: 600 }}>{fmt(r.projection_cvr.currentCPA)}</span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ color: "var(--text-faint)" }}>CPC</span>
-                    <span style={{ color: "var(--text)", fontWeight: 600 }}>{fmt(r.projection_cvr.currentCPC)}</span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ color: "var(--text-faint)" }}>CVR</span>
-                    <span style={{ color: "var(--text)", fontWeight: 600 }}>{r.projection_cvr.currentCVR_pct.toFixed(2)}%</span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, paddingTop: 8, borderTop: "1px solid var(--border)" }}>
-                    <span style={{ color: "var(--text-faint)" }}>Profit / cust</span>
-                    <span style={{ color: r.projection_cvr.currentProfit >= 0 ? "var(--green)" : "var(--red)", fontWeight: 700 }}>
-                      {(r.projection_cvr.currentProfit >= 0 ? "+" : "") + fmt(r.projection_cvr.currentProfit)}
-                    </span>
-                  </div>
-                </div>
+          {/* Side-by-side comparison */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 18 }}>
+            {/* CURRENT — INLINE EDITABLE */}
+            <div style={{
+              background: "var(--bg-elev-2)",
+              border: "1px solid var(--border)",
+              borderRadius: 14,
+              padding: 20,
+            }}>
+              <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>
+                Current · no rebills
               </div>
 
-              {/* NEW PROJECTED */}
-              <div style={{
-                background: "rgba(34, 197, 94, 0.05)",
-                border: "1px solid rgba(34, 197, 94, 0.3)",
-                borderRadius: 14,
-                padding: 20,
-                boxShadow: "0 0 30px var(--green-glow)",
-              }}>
-                <div style={{ fontSize: 10, fontWeight: 600, color: "var(--green)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>
-                  Projected · with rebills
+              {/* Price (large editable) */}
+              <div style={{ marginBottom: 12, display: "flex", alignItems: "baseline", gap: 2 }}>
+                <span style={{ fontSize: 24, fontWeight: 700, color: "var(--text)" }}>$</span>
+                <input
+                  type="number"
+                  value={inputs.currentPrice || ""}
+                  placeholder="0"
+                  onChange={(e) => u("currentPrice", parseFloat(e.target.value) || 0)}
+                  step="0.01"
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    borderBottom: "1px dashed var(--border-strong)",
+                    outline: "none",
+                    color: "var(--text)",
+                    fontSize: 24,
+                    fontWeight: 700,
+                    letterSpacing: "-0.02em",
+                    width: 130,
+                    padding: "2px 4px",
+                    fontFamily: "inherit",
+                  }}
+                />
+              </div>
+
+              <div style={{ display: "grid", gap: 8, fontSize: 13, fontFamily: "'JetBrains Mono', monospace" }}>
+                {/* CPA editable */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ color: "var(--text-faint)" }}>CPA</span>
+                  <span style={{ color: "var(--text)", fontWeight: 600, display: "inline-flex", alignItems: "baseline" }}>
+                    $
+                    <input
+                      type="number"
+                      value={inputs.currentCPA || ""}
+                      placeholder="0"
+                      onChange={(e) => u("currentCPA", parseFloat(e.target.value) || 0)}
+                      step="0.01"
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        borderBottom: "1px dashed var(--border-strong)",
+                        outline: "none",
+                        color: "var(--text)",
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        width: 70,
+                        textAlign: "right",
+                        padding: "1px 2px",
+                      }}
+                    />
+                  </span>
                 </div>
-                <div style={{ fontSize: 24, fontWeight: 700, color: "var(--green)", letterSpacing: "-0.02em", marginBottom: 12 }}>
-                  {fmt(r.active.price)}
+
+                {/* CPC editable */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ color: "var(--text-faint)" }}>CPC</span>
+                  <span style={{ color: "var(--text)", fontWeight: 600, display: "inline-flex", alignItems: "baseline" }}>
+                    $
+                    <input
+                      type="number"
+                      value={inputs.currentCPC || ""}
+                      placeholder="0"
+                      onChange={(e) => u("currentCPC", parseFloat(e.target.value) || 0)}
+                      step="0.01"
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        borderBottom: "1px dashed var(--border-strong)",
+                        outline: "none",
+                        color: "var(--text)",
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        width: 70,
+                        textAlign: "right",
+                        padding: "1px 2px",
+                      }}
+                    />
+                  </span>
                 </div>
-                <div style={{ display: "grid", gap: 8, fontSize: 13, fontFamily: "'JetBrains Mono', monospace" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ color: "var(--text-faint)" }}>CPA</span>
-                    <span style={{ color: "var(--green)", fontWeight: 600 }}>
-                      {fmt(r.projection_cvr.newCPA)}
+
+                {/* CVR derived */}
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "var(--text-faint)" }}>CVR <span style={{ fontSize: 10, color: "var(--text-faint)", opacity: 0.6 }}>(derived)</span></span>
+                  <span style={{ color: "var(--text)", fontWeight: 600 }}>
+                    {r.projection_cvr ? r.projection_cvr.currentCVR_pct.toFixed(2) + "%" : "—"}
+                  </span>
+                </div>
+
+                {/* Profit derived */}
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, paddingTop: 8, borderTop: "1px solid var(--border)" }}>
+                  <span style={{ color: "var(--text-faint)" }}>Profit / cust</span>
+                  <span style={{ color: r.projection_cvr && r.projection_cvr.currentProfit >= 0 ? "var(--green)" : "var(--red)", fontWeight: 700 }}>
+                    {r.projection_cvr
+                      ? (r.projection_cvr.currentProfit >= 0 ? "+" : "") + fmt(r.projection_cvr.currentProfit)
+                      : "—"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* NEW PROJECTED */}
+            <div style={{
+              background: "rgba(34, 197, 94, 0.05)",
+              border: "1px solid rgba(34, 197, 94, 0.3)",
+              borderRadius: 14,
+              padding: 20,
+              boxShadow: "0 0 30px var(--green-glow)",
+            }}>
+              <div style={{ fontSize: 10, fontWeight: 600, color: "var(--green)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>
+                Projected · with rebills
+              </div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: "var(--green)", letterSpacing: "-0.02em", marginBottom: 12 }}>
+                {fmt(r.active.price)}
+              </div>
+              <div style={{ display: "grid", gap: 8, fontSize: 13, fontFamily: "'JetBrains Mono', monospace" }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "var(--text-faint)" }}>CPA</span>
+                  <span style={{ color: "var(--green)", fontWeight: 600 }}>
+                    {r.projection_cvr ? fmt(r.projection_cvr.newCPA) : "—"}
+                    {r.projection_cvr && (
                       <span style={{ fontSize: 10, color: r.projection_cvr.cpaDiff > 0 ? "var(--green)" : "var(--red)", marginLeft: 6 }}>
                         ({r.projection_cvr.cpaDiff > 0 ? "−" : "+"}{Math.abs(r.projection_cvr.cpaDiffPct).toFixed(0)}%)
                       </span>
-                    </span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ color: "var(--text-faint)" }}>CPC</span>
-                    <span style={{ color: "var(--green)", fontWeight: 600 }}>
-                      {fmt(r.projection_cvr.newCPC)}
+                    )}
+                  </span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "var(--text-faint)" }}>CPC</span>
+                  <span style={{ color: "var(--green)", fontWeight: 600 }}>
+                    {r.projection_cvr ? fmt(r.projection_cvr.newCPC) : "—"}
+                    {r.projection_cvr && (
                       <span style={{ fontSize: 10, color: r.projection_cvr.cpcDiff > 0 ? "var(--green)" : "var(--red)", marginLeft: 6 }}>
                         ({r.projection_cvr.cpcDiff > 0 ? "−" : "+"}{Math.abs(r.projection_cvr.cpcDiffPct).toFixed(0)}%)
                       </span>
-                    </span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ color: "var(--text-faint)" }}>CVR</span>
-                    <span style={{ color: "var(--green)", fontWeight: 600 }}>
-                      {r.projection_cvr.newCVR_pct.toFixed(2)}%
+                    )}
+                  </span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "var(--text-faint)" }}>CVR</span>
+                  <span style={{ color: "var(--green)", fontWeight: 600 }}>
+                    {r.projection_cvr ? r.projection_cvr.newCVR_pct.toFixed(2) + "%" : "—"}
+                    {r.projection_cvr && (
                       <span style={{ fontSize: 10, color: r.projection_cvr.cvrDiff > 0 ? "var(--green)" : "var(--red)", marginLeft: 6 }}>
                         ({r.projection_cvr.cvrDiff > 0 ? "+" : ""}{r.projection_cvr.cvrDiff.toFixed(2)}pp)
                       </span>
-                    </span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, paddingTop: 8, borderTop: "1px solid rgba(34, 197, 94, 0.2)" }}>
-                    <span style={{ color: "var(--text-faint)" }}>Profit / cust</span>
-                    <span style={{ color: r.projection_cvr.newProfit >= 0 ? "var(--green)" : "var(--red)", fontWeight: 700 }}>
-                      {(r.projection_cvr.newProfit >= 0 ? "+" : "") + fmt(r.projection_cvr.newProfit)}
-                    </span>
-                  </div>
+                    )}
+                  </span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, paddingTop: 8, borderTop: "1px solid rgba(34, 197, 94, 0.2)" }}>
+                  <span style={{ color: "var(--text-faint)" }}>Profit / cust</span>
+                  <span style={{ color: r.projection_cvr && r.projection_cvr.newProfit >= 0 ? "var(--green)" : "var(--red)", fontWeight: 700 }}>
+                    {r.projection_cvr
+                      ? (r.projection_cvr.newProfit >= 0 ? "+" : "") + fmt(r.projection_cvr.newProfit)
+                      : "—"}
+                  </span>
                 </div>
               </div>
             </div>
+          </div>
 
-            {/* Summary callout */}
+          {/* Summary callout */}
+          {r.projection_cvr && (
             <div style={{
               padding: "14px 18px",
               background: "var(--bg-elev-2)",
@@ -938,6 +996,7 @@ export default function App() {
               fontSize: 13,
               color: "var(--text)",
               lineHeight: 1.6,
+              marginBottom: 14,
             }}>
               <strong style={{ color: r.projection_cvr.profitDiff >= 0 ? "var(--green)" : "var(--red)" }}>
                 {r.projection_cvr.profitDiff >= 0 ? "↑" : "↓"} {(r.projection_cvr.profitDiff >= 0 ? "+" : "") + fmt(r.projection_cvr.profitDiff)} per customer
@@ -945,8 +1004,68 @@ export default function App() {
               by moving from <strong>{fmt(r.projection_cvr.currentPrice)}</strong> (no rebills) to <strong>{fmt(r.active.price)}</strong> (with rebills). Estimated CPA drop:{" "}
               <strong style={{ color: "var(--green)" }}>−{r.projection_cvr.cpaDiffPct.toFixed(0)}%</strong> (${r.projection_cvr.currentCPA.toFixed(2)} → ${r.projection_cvr.newCPA.toFixed(2)}).
             </div>
+          )}
+
+          {/* Elasticity controls — compact footer */}
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 12,
+            padding: "12px 16px",
+            background: "var(--bg-elev-2)",
+            borderRadius: 10,
+            border: "1px solid var(--border)",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 10, fontWeight: 600, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>
+                CVR elasticity
+              </span>
+              <input
+                type="number"
+                value={inputs.cvrElasticity}
+                onChange={(e) => u("cvrElasticity", Math.max(0, Math.min(2, parseFloat(e.target.value) || 0)))}
+                step="0.1"
+                style={{
+                  background: "var(--bg-elev)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  outline: "none",
+                  color: "var(--text)",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 12,
+                  width: 60,
+                  padding: "4px 6px",
+                  textAlign: "center",
+                }}
+              />
+              <span style={{ fontSize: 10, color: "var(--text-faint)" }}>0=none · 0.5=mid · 1=strong</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 10, fontWeight: 600, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>
+                CPC elasticity
+              </span>
+              <input
+                type="number"
+                value={inputs.cpcElasticity}
+                onChange={(e) => u("cpcElasticity", Math.max(0, Math.min(1, parseFloat(e.target.value) || 0)))}
+                step="0.05"
+                style={{
+                  background: "var(--bg-elev)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  outline: "none",
+                  color: "var(--text)",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 12,
+                  width: 60,
+                  padding: "4px 6px",
+                  textAlign: "center",
+                }}
+              />
+              <span style={{ fontSize: 10, color: "var(--text-faint)" }}>0.1=gentle · 0.3=steep</span>
+            </div>
           </div>
-        )}
+        </div>
 
         {/* ========== PRICE OPTIONS (3 cushion levels) ========== */}
 
