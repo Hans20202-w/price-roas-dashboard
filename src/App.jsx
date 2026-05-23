@@ -107,21 +107,25 @@ function calc(inputs) {
   // Custom price scenario (user-entered)
   const custom = inputs.customPrice > 0 ? buildScenarioFromPrice(inputs.customPrice, "Your custom price") : null;
 
-  // ROAS profit table at primary price — what you net at different real-world ROAS levels
+  // ACTIVE scenario — what the rest of the dashboard uses. Custom wins if set, else primary.
+  const active = custom || primary;
+  const usingCustom = !!custom;
+
+  // ROAS profit table at active price
   const roasTable = [0.5, 0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.5, 3.0].map((roas) => {
-    const adSpend = primary.price / roas;
-    const profit = primary.totalNet - adSpend;
+    const adSpend = active.price / roas;
+    const profit = active.totalNet - adSpend;
     return { roas, adSpend, profit };
   });
 
-  // Actual numbers (if user provided their real CPA)
+  // Actual numbers (if user provided their real CPA) — uses active scenario
   const actualCPA = inputs.actualCPA;
   let actual = null;
   if (actualCPA > 0) {
-    const frontAfterAds = primary.frontEndGross - actualCPA;
-    const totalProfit = primary.totalNet - actualCPA;
-    const actualROAS = primary.price / actualCPA;
-    const vsBEROAS = actualROAS - primary.beROAS;
+    const frontAfterAds = active.frontEndGross - actualCPA;
+    const totalProfit = active.totalNet - actualCPA;
+    const actualROAS = active.price / actualCPA;
+    const vsBEROAS = actualROAS - active.beROAS;
     let status, statusColor;
     if (totalProfit > 10) { status = "Profitable"; statusColor = "var(--green)"; }
     else if (totalProfit > 0) { status = "Marginal"; statusColor = "var(--amber)"; }
@@ -129,7 +133,47 @@ function calc(inputs) {
     actual = { actualCPA, frontAfterAds, totalProfit, actualROAS, vsBEROAS, status, statusColor };
   }
 
-  return { primary, scenarios, custom, backendNet, rebillDetails, roasTable, actual };
+  // ========== SPECULATION / PAYBACK ==========
+  // Use actualCPA if set, otherwise the max CPA at the active scenario (so user always sees something)
+  const specCPA = actualCPA > 0 ? actualCPA : active.maxCPA_total;
+  const specCPAIsFromActual = actualCPA > 0;
+
+  // Cycle-by-cycle cumulative cashflow per customer
+  const projection = [];
+  // Cycle 0: initial sale, paid CPA upfront
+  let cumNet = active.frontEndGross - specCPA;
+  projection.push({
+    cycle: 0,
+    label: "Initial sale (− CPA)",
+    netThisCycle: cumNet,
+    cumNet,
+    cumRev: active.price,
+  });
+  let cumRev = active.price;
+  rebillDetails.forEach((d) => {
+    cumNet += d.net;
+    cumRev += d.rev;
+    projection.push({
+      cycle: d.cycle,
+      label: `Rebill #${d.cycle}`,
+      netThisCycle: d.net,
+      cumNet,
+      cumRev,
+    });
+  });
+
+  const finalNet = cumNet;
+  const paybackRow = projection.find((p) => p.cumNet >= 0);
+  const paybackCycle = paybackRow ? paybackRow.cycle : null;
+  const effectiveCPA = specCPA - backendNet; // negative = backend more than pays for acquisition
+  const frontROAS = active.price / specCPA;
+  const totalROAS = cumRev / specCPA;
+
+  return {
+    primary, scenarios, custom, active, usingCustom,
+    backendNet, rebillDetails, roasTable, actual,
+    projection, specCPA, specCPAIsFromActual, finalNet, paybackCycle, effectiveCPA, frontROAS, totalROAS,
+  };
 }
 
 function Field({ label, value, onChange, prefix, suffix, step = "1", hint }) {
@@ -470,14 +514,14 @@ export default function App() {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
             <ResultTile
               label="List your product at"
-              value={fmt(r.primary.price)}
-              sub={`Front-end nets ${fmt(r.primary.frontEndGross)} (before ads)`}
+              value={fmt(r.active.price)}
+              sub={r.usingCustom ? `Your custom price · front nets ${fmt(r.active.frontEndGross)}` : `Front-end nets ${fmt(r.active.frontEndGross)} (before ads)`}
               color="var(--green)"
               glow="var(--green-glow)"
             />
             <ResultTile
               label="Your BE ROAS"
-              value={fmtX(r.primary.beROAS)}
+              value={fmtX(r.active.beROAS)}
               sub={`Above this = profit · below = bleeding`}
               color="var(--cyan)"
               glow="var(--cyan-glow)"
@@ -485,10 +529,10 @@ export default function App() {
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-            <MiniStat label="Max CPA" value={fmt(r.primary.maxCPA_total)} color="var(--green)" hint="overall breakeven" />
-            <MiniStat label="Max CPC" value={fmt(r.primary.maxCPC_total)} color="var(--cyan)" hint={`at ${calculatedInputs.conversionRate.toFixed(1)}% CVR`} />
+            <MiniStat label="Max CPA" value={fmt(r.active.maxCPA_total)} color="var(--green)" hint="overall breakeven" />
+            <MiniStat label="Max CPC" value={fmt(r.active.maxCPC_total)} color="var(--cyan)" hint={`at ${calculatedInputs.conversionRate.toFixed(1)}% CVR`} />
             <MiniStat label="Backend net" value={fmt(r.backendNet)} color="var(--violet)" hint={`${calculatedInputs.rebillCycles} rebills`} />
-            <MiniStat label="Total / customer" value={fmt(r.primary.totalNet)} color="var(--text)" hint="front + back, pre-ads" />
+            <MiniStat label="Total / customer" value={fmt(r.active.totalNet)} color="var(--text)" hint="front + back, pre-ads" />
           </div>
         </div>
 
@@ -544,7 +588,7 @@ export default function App() {
                 label="Your actual ROAS"
                 value={fmtX(r.actual.actualROAS)}
                 color="var(--cyan)"
-                hint={`BE is ${fmtX(r.primary.beROAS)}`}
+                hint={`BE is ${fmtX(r.active.beROAS)}`}
               />
               <MiniStat
                 label="vs BE ROAS"
@@ -555,6 +599,139 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* ========== SPECULATION / PAYBACK ========== */}
+
+        <div style={{
+          position: "relative",
+          background: r.finalNet >= 0
+            ? "radial-gradient(ellipse at top right, var(--green-glow), transparent 70%), var(--bg-elev)"
+            : "radial-gradient(ellipse at top right, rgba(239, 68, 68, 0.12), transparent 70%), var(--bg-elev)",
+          borderRadius: 20,
+          padding: 28,
+          border: `1px solid ${r.finalNet >= 0 ? "rgba(34, 197, 94, 0.2)" : "rgba(239, 68, 68, 0.2)"}`,
+          marginBottom: 16,
+        }}>
+          <SectionHeader
+            accent={r.finalNet >= 0 ? "var(--green)" : "var(--red)"}
+            badge={
+              <span style={{
+                fontSize: 10,
+                color: "var(--text-faint)",
+                background: "var(--bg-elev-2)",
+                padding: "3px 8px",
+                borderRadius: 6,
+                border: "1px solid var(--border)",
+                fontFamily: "'JetBrains Mono', monospace",
+                marginLeft: 8,
+              }}>
+                {r.specCPAIsFromActual ? "using your actual CPA" : "using max CPA (no actual set)"}
+              </span>
+            }
+          >
+            Speculation — payback over time
+          </SectionHeader>
+          <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 18, lineHeight: 1.5 }}>
+            If you sell at <strong style={{ color: "var(--text)" }}>{fmt(r.active.price)}</strong> and pay <strong style={{ color: "var(--text)" }}>{fmt(r.specCPA)}</strong> CPA, here's the cumulative profit per customer over each rebill cycle.
+            {!r.specCPAIsFromActual && (
+              <span style={{ color: "var(--amber)" }}> Set "Your actual CPA" above to use your real Google Ads number.</span>
+            )}
+          </div>
+
+          {/* Stats */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
+            <MiniStat
+              label="Final profit / cust"
+              value={(r.finalNet >= 0 ? "+" : "") + fmt(r.finalNet)}
+              color={r.finalNet >= 0 ? "var(--green)" : "var(--red)"}
+              hint="after all rebills"
+            />
+            <MiniStat
+              label="Payback at"
+              value={r.paybackCycle === null ? "Never" : r.paybackCycle === 0 ? "Day 1" : `Cycle #${r.paybackCycle}`}
+              color={r.paybackCycle === null ? "var(--red)" : r.paybackCycle === 0 ? "var(--green)" : "var(--amber)"}
+              hint={r.paybackCycle === null ? "CPA too high" : r.paybackCycle === 0 ? "instantly profitable" : `${r.paybackCycle} rebill(s) needed`}
+            />
+            <MiniStat
+              label="Effective CPA"
+              value={(r.effectiveCPA < 0 ? "−" : "") + fmt(Math.abs(r.effectiveCPA))}
+              color={r.effectiveCPA < 0 ? "var(--green)" : r.effectiveCPA < r.specCPA / 2 ? "var(--amber)" : "var(--red)"}
+              hint={r.effectiveCPA < 0 ? "backend pays you back!" : "after backend"}
+            />
+            <MiniStat
+              label="Total ROAS"
+              value={fmtX(r.totalROAS)}
+              color="var(--cyan)"
+              hint={`front-end is ${fmtX(r.frontROAS)}`}
+            />
+          </div>
+
+          {/* Cycle-by-cycle table */}
+          <div style={{ background: "var(--bg-elev-2)", borderRadius: 12, padding: "4px 12px", border: "1px solid var(--border)" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr>
+                  {["Cycle", "Event", "Net this cycle", "Cumulative", ""].map((h, i) => (
+                    <th key={i} style={{
+                      textAlign: i <= 1 ? "left" : i === 4 ? "left" : "right",
+                      padding: "10px 8px",
+                      color: "var(--text-faint)",
+                      fontSize: 10,
+                      fontWeight: 600,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.06em",
+                      borderBottom: "1px solid var(--border)",
+                    }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {r.projection.map((p, i, arr) => {
+                  const isPayback = r.paybackCycle !== null && p.cycle === r.paybackCycle && p.cycle > 0;
+                  const statusColor = p.cumNet >= 0 ? "var(--green)" : "var(--red)";
+                  const statusLabel = p.cumNet >= 0 ? (isPayback ? "● Paid back" : "● In profit") : "● Underwater";
+                  return (
+                    <tr key={i} style={{
+                      background: isPayback ? "rgba(34, 197, 94, 0.08)" : "transparent",
+                    }}>
+                      <td style={{ padding: "12px 8px", fontFamily: "'JetBrains Mono', monospace", color: "var(--text)", borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
+                        #{p.cycle}
+                      </td>
+                      <td style={{ padding: "12px 8px", color: p.cycle === 0 ? "var(--text)" : "var(--text-dim)", fontSize: 12, borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
+                        {p.label}
+                      </td>
+                      <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: p.netThisCycle >= 0 ? "var(--green)" : "var(--red)", borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
+                        {(p.netThisCycle >= 0 ? "+" : "") + fmt(p.netThisCycle)}
+                      </td>
+                      <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: statusColor, fontWeight: 700, fontSize: 14, borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
+                        {(p.cumNet >= 0 ? "+" : "") + fmt(p.cumNet)}
+                      </td>
+                      <td style={{ padding: "12px 8px", fontSize: 11, color: statusColor, fontWeight: isPayback ? 600 : 400, borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
+                        {statusLabel}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {r.effectiveCPA < 0 && (
+            <div style={{
+              marginTop: 16,
+              padding: "12px 16px",
+              background: "rgba(34, 197, 94, 0.08)",
+              border: "1px solid rgba(34, 197, 94, 0.3)",
+              borderRadius: 10,
+              fontSize: 12,
+              color: "var(--text)",
+              lineHeight: 1.5,
+            }}>
+              <strong style={{ color: "var(--green)" }}>💰 Effective CPA is negative.</strong>{" "}
+              Your backend ({fmt(r.backendNet)}) more than pays for your CPA ({fmt(r.specCPA)}). You can theoretically scale ad spend higher — the cap is volume and your CVR holding up.
+            </div>
+          )}
+        </div>
 
         {/* ========== PRICE OPTIONS (3 cushion levels) ========== */}
 
@@ -677,7 +854,7 @@ export default function App() {
           <SectionHeader accent="var(--amber)">
             Profit at different ROAS levels
             <span style={{ color: "var(--text-faint)", fontWeight: 400, marginLeft: 6, fontSize: 12 }}>
-              (at {fmt(r.primary.price)})
+              (at {fmt(r.active.price)})
             </span>
           </SectionHeader>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -699,7 +876,7 @@ export default function App() {
             </thead>
             <tbody>
               {r.roasTable.map((row, i, arr) => {
-                const isBE = Math.abs(row.roas - r.primary.beROAS) < 0.15;
+                const isBE = Math.abs(row.roas - r.active.beROAS) < 0.15;
                 const status = row.profit > 15 ? "healthy" : row.profit > 0 ? "marginal" : "bleeding";
                 const statusColor = row.profit > 15 ? "var(--green)" : row.profit > 0 ? "var(--amber)" : "var(--red)";
                 return (
