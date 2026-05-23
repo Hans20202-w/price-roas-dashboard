@@ -25,6 +25,8 @@ const FACTORY_DEFAULTS = {
   currentCPC: 1.03,
   cvrElasticity: 0.5, // how much CVR scales with price (0 = no response, 1 = inversely proportional)
   cpcElasticity: 0.1, // how much CPC scales with price (gentle)
+  // Monthly goal
+  monthlyGoal: 100000, // target net profit per month
 };
 
 const STORAGE_KEY = "roas-calc-defaults-v4";
@@ -223,6 +225,54 @@ function calc(inputs) {
     };
   }
 
+  // ========== MONTHLY GOAL CALCULATOR ==========
+  // Pick best available profit/customer and CPA estimate
+  let goal = null;
+  const goalProfit = inputs.monthlyGoal;
+  if (goalProfit > 0) {
+    let profitPerCust, goalCPA, cvrForGoal;
+    let source;
+    if (projection_cvr && projection_cvr.newProfit > 0) {
+      profitPerCust = projection_cvr.newProfit;
+      goalCPA = projection_cvr.newCPA;
+      cvrForGoal = projection_cvr.newCVR_pct; // %
+      source = "projected (with rebills)";
+    } else if (actual && actual.totalProfit > 0) {
+      profitPerCust = actual.totalProfit;
+      goalCPA = actualCPA;
+      cvrForGoal = inputs.conversionRate;
+      source = "your actual CPA";
+    } else {
+      profitPerCust = active.totalNet - specCPA;
+      goalCPA = specCPA;
+      cvrForGoal = inputs.conversionRate;
+      source = "max-CPA scenario";
+    }
+
+    if (profitPerCust > 0 && goalCPA > 0) {
+      const customersNeeded = goalProfit / profitPerCust;
+      const dailyCustomers = customersNeeded / 30;
+      const monthlyAdSpend = customersNeeded * goalCPA;
+      const dailyAdSpend = monthlyAdSpend / 30;
+      const clicksNeeded = cvrForGoal > 0 ? customersNeeded / (cvrForGoal / 100) : null;
+      const dailyClicks = clicksNeeded ? clicksNeeded / 30 : null;
+      const feRevenue = customersNeeded * active.price;
+      const cumBeRev = rebillDetails.reduce((sum, d) => sum + d.rev, 0);
+      const beRevenue = customersNeeded * cumBeRev;
+      const totalRevenue = feRevenue + beRevenue;
+      const netCashflow = totalRevenue - monthlyAdSpend - (customersNeeded * cogs); // rough
+      goal = {
+        goalProfit, profitPerCust, cpa: goalCPA, cvr: cvrForGoal, source,
+        customersNeeded, dailyCustomers,
+        monthlyAdSpend, dailyAdSpend,
+        clicksNeeded, dailyClicks,
+        feRevenue, beRevenue, totalRevenue,
+      };
+    } else {
+      goal = { error: "Profit per customer is zero or negative — fix inputs first.", source };
+    }
+  }
+
   return {
     primary, scenarios, custom, active, usingCustom,
     backendNet, rebillDetails, roasTable, actual,
@@ -230,6 +280,7 @@ function calc(inputs) {
     noRebill_maxCPA, noRebill_maxCPC, noRebill_beROAS, noRebill_priceNeeded,
     priceSavings, cpaAdvantage, cpcAdvantage, advantageMultiplier,
     projection_cvr,
+    goal,
   };
 }
 
@@ -1065,6 +1116,192 @@ export default function App() {
               <span style={{ fontSize: 10, color: "var(--text-faint)" }}>0.1=gentle · 0.3=steep</span>
             </div>
           </div>
+        </div>
+
+        {/* ========== MONTHLY GOAL CALCULATOR ========== */}
+
+        <div style={{
+          position: "relative",
+          background: "radial-gradient(ellipse at top left, rgba(245, 158, 11, 0.10), transparent 60%), var(--bg-elev)",
+          borderRadius: 20,
+          padding: 28,
+          border: "1px solid rgba(245, 158, 11, 0.2)",
+          marginBottom: 16,
+        }}>
+          <SectionHeader accent="var(--amber)">
+            Monthly goal — what scale do you need?
+            {r.goal && r.goal.source && (
+              <span style={{
+                fontSize: 10,
+                color: "var(--text-faint)",
+                background: "var(--bg-elev-2)",
+                padding: "3px 8px",
+                borderRadius: 6,
+                border: "1px solid var(--border)",
+                fontFamily: "'JetBrains Mono', monospace",
+                marginLeft: 8,
+              }}>
+                using: {r.goal.source}
+              </span>
+            )}
+          </SectionHeader>
+          <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 18, lineHeight: 1.5 }}>
+            Type your target monthly profit. Dashboard calculates customers needed (over their lifetime including rebills), ad spend, daily volume, and required clicks.
+          </div>
+
+          {/* Goal input — big */}
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 16,
+            marginBottom: 24,
+            flexWrap: "wrap",
+            padding: "16px 20px",
+            background: "var(--bg-elev-2)",
+            borderRadius: 12,
+            border: "1px solid var(--border)",
+          }}>
+            <span style={{
+              fontSize: 11,
+              color: "var(--text-faint)",
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              fontWeight: 600,
+            }}>
+              I want
+            </span>
+            <div style={{ display: "inline-flex", alignItems: "baseline", gap: 2 }}>
+              <span style={{ fontSize: 32, fontWeight: 700, color: "var(--amber)" }}>$</span>
+              <input
+                type="number"
+                value={inputs.monthlyGoal || ""}
+                placeholder="100000"
+                onChange={(e) => u("monthlyGoal", parseFloat(e.target.value) || 0)}
+                step="1000"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  borderBottom: "1px dashed var(--border-strong)",
+                  outline: "none",
+                  color: "var(--text)",
+                  fontSize: 32,
+                  fontWeight: 700,
+                  letterSpacing: "-0.02em",
+                  width: 180,
+                  padding: "2px 4px",
+                  fontFamily: "inherit",
+                }}
+              />
+            </div>
+            <span style={{ fontSize: 14, color: "var(--text-dim)" }}>
+              profit per month
+            </span>
+          </div>
+
+          {r.goal && r.goal.error && (
+            <div style={{
+              padding: "14px 18px",
+              background: "rgba(239, 68, 68, 0.06)",
+              border: "1px solid rgba(239, 68, 68, 0.3)",
+              borderRadius: 12,
+              fontSize: 13,
+              color: "var(--red)",
+            }}>
+              {r.goal.error}
+            </div>
+          )}
+
+          {r.goal && !r.goal.error && (
+            <>
+              {/* Main stats — what you need */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
+                <MiniStat
+                  label="Customers / month"
+                  value={Math.ceil(r.goal.customersNeeded).toLocaleString()}
+                  color="var(--green)"
+                  hint={`${r.goal.dailyCustomers.toFixed(1)} per day`}
+                />
+                <MiniStat
+                  label="Ad spend / month"
+                  value={fmt(r.goal.monthlyAdSpend)}
+                  color="var(--amber)"
+                  hint={`${fmt(r.goal.dailyAdSpend)} per day`}
+                />
+                <MiniStat
+                  label="Clicks / month"
+                  value={r.goal.clicksNeeded ? Math.ceil(r.goal.clicksNeeded).toLocaleString() : "—"}
+                  color="var(--cyan)"
+                  hint={r.goal.dailyClicks ? `${Math.ceil(r.goal.dailyClicks).toLocaleString()} per day` : ""}
+                />
+                <MiniStat
+                  label="Total revenue / mo"
+                  value={fmt(r.goal.totalRevenue)}
+                  color="var(--violet)"
+                  hint="front + backend"
+                />
+              </div>
+
+              {/* Breakdown table */}
+              <div style={{ background: "var(--bg-elev-2)", borderRadius: 12, padding: "4px 14px", border: "1px solid var(--border)" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <tbody>
+                    <tr>
+                      <td style={{ padding: "12px 8px", color: "var(--text-faint)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>
+                        Profit per customer (lifetime)
+                      </td>
+                      <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--green)", fontWeight: 600, borderBottom: "1px solid var(--border)" }}>
+                        {fmt(r.goal.profitPerCust)}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style={{ padding: "12px 8px", color: "var(--text-faint)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>
+                        CPA used
+                      </td>
+                      <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--amber)", borderBottom: "1px solid var(--border)" }}>
+                        {fmt(r.goal.cpa)}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style={{ padding: "12px 8px", color: "var(--text-faint)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>
+                        CVR used
+                      </td>
+                      <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--cyan)", borderBottom: "1px solid var(--border)" }}>
+                        {r.goal.cvr.toFixed(2)}%
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style={{ padding: "12px 8px", color: "var(--text-faint)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>
+                        Front-end revenue / month
+                      </td>
+                      <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--text)", borderBottom: "1px solid var(--border)" }}>
+                        {fmt(r.goal.feRevenue)}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style={{ padding: "12px 8px", color: "var(--text-faint)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>
+                        Backend revenue / month
+                      </td>
+                      <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--text)", borderBottom: "1px solid var(--border)" }}>
+                        {fmt(r.goal.beRevenue)}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style={{ padding: "14px 8px", color: "var(--green)", fontWeight: 600, fontSize: 12, background: "rgba(34, 197, 94, 0.04)" }}>
+                        Net profit / month
+                      </td>
+                      <td style={{ padding: "14px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--green)", fontWeight: 700, fontSize: 15, background: "rgba(34, 197, 94, 0.04)" }}>
+                        {fmt(r.goal.goalProfit)}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div style={{ marginTop: 14, fontSize: 11, color: "var(--text-faint)", lineHeight: 1.6 }}>
+                <strong style={{ color: "var(--text-dim)" }}>Assumptions:</strong> steady-state monthly cohort, customers acquired in a month go through their full rebill cycle. Actual cashflow in early months will be lower because backend takes time to materialize.
+              </div>
+            </>
+          )}
         </div>
 
         {/* ========== PRICE OPTIONS (3 cushion levels) ========== */}
