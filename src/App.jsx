@@ -19,6 +19,12 @@ const FACTORY_DEFAULTS = {
   conversionRate: 2.0,
   actualCPA: 0, // 0 = not provided
   customPrice: 0, // 0 = not set; user types their own price to compare
+  // Current Google Ads data (no rebills) — for price-change projection
+  currentPrice: 199.99,
+  currentCPA: 36.63,
+  currentCPC: 1.03,
+  cvrElasticity: 0.5, // how much CVR scales with price (0 = no response, 1 = inversely proportional)
+  cpcElasticity: 0.1, // how much CPC scales with price (gentle)
 };
 
 const STORAGE_KEY = "roas-calc-defaults-v4";
@@ -169,10 +175,61 @@ function calc(inputs) {
   const frontROAS = active.price / specCPA;
   const totalROAS = cumRev / specCPA;
 
+  // ========== REBILL ADVANTAGE ==========
+  // "Without rebills" scenario at the same active price: backend = 0
+  const noRebill_maxCPA = active.frontEndGross; // only front-end gross funds ad spend
+  const noRebill_maxCPC = noRebill_maxCPA * cvr;
+  const noRebill_beROAS = active.frontEndGross > 0 ? active.price / active.frontEndGross : Infinity;
+
+  // What price would you need WITHOUT rebills to afford the same Max CPA as with rebills?
+  // price - cogs - price*txR = active.maxCPA_total  →  price = (cogs + maxCPA) / (1-txR)
+  const noRebill_priceNeededRaw = (cogs + active.maxCPA_total) / (1 - txR);
+  const noRebill_priceNeeded = roundToNineNine(noRebill_priceNeededRaw);
+  const priceSavings = noRebill_priceNeeded - active.price;
+
+  const cpaAdvantage = active.maxCPA_total - noRebill_maxCPA; // = backendNet
+  const cpcAdvantage = active.maxCPC_total - noRebill_maxCPC;
+  const advantageMultiplier = noRebill_maxCPA > 0.01 ? active.maxCPA_total / noRebill_maxCPA : Infinity;
+
+  // ========== PRICE CHANGE PROJECTION ==========
+  // Given current Google Ads data at currentPrice, project new CVR/CPC/CPA at active.price
+  const { currentPrice, currentCPA, currentCPC, cvrElasticity, cpcElasticity } = inputs;
+  let projection_cvr = null;
+  if (currentCPA > 0 && currentCPC > 0 && currentPrice > 0 && active.price > 0) {
+    const currentCVR_pct = (currentCPC / currentCPA) * 100; // %
+    // CVR rises as price drops: newCVR = currentCVR × (currentPrice / newPrice)^elasticity
+    const priceRatio = currentPrice / active.price;
+    const newCVR_pct = currentCVR_pct * Math.pow(priceRatio, cvrElasticity);
+    // CPC falls gently as price drops: newCPC = currentCPC × (newPrice / currentPrice)^cpcElasticity
+    const newCPC = currentCPC * Math.pow(active.price / currentPrice, cpcElasticity);
+    const newCPA = newCVR_pct > 0 ? newCPC / (newCVR_pct / 100) : Infinity;
+
+    // Profit comparison (per customer)
+    const currentProfit = currentPrice - cogs - currentPrice * txR - currentCPA; // no rebills
+    const newProfit = active.frontEndGross + backendNet - newCPA; // with rebills
+
+    // Diffs
+    const cpaDiff = currentCPA - newCPA;
+    const cpaDiffPct = currentCPA > 0 ? (cpaDiff / currentCPA) * 100 : 0;
+    const cpcDiff = currentCPC - newCPC;
+    const cpcDiffPct = currentCPC > 0 ? (cpcDiff / currentCPC) * 100 : 0;
+    const cvrDiff = newCVR_pct - currentCVR_pct;
+    const profitDiff = newProfit - currentProfit;
+
+    projection_cvr = {
+      currentCVR_pct, currentCPA, currentCPC, currentPrice, currentProfit,
+      newCVR_pct, newCPC, newCPA, newProfit,
+      cpaDiff, cpaDiffPct, cpcDiff, cpcDiffPct, cvrDiff, profitDiff,
+    };
+  }
+
   return {
     primary, scenarios, custom, active, usingCustom,
     backendNet, rebillDetails, roasTable, actual,
     projection, specCPA, specCPAIsFromActual, finalNet, paybackCycle, effectiveCPA, frontROAS, totalROAS,
+    noRebill_maxCPA, noRebill_maxCPC, noRebill_beROAS, noRebill_priceNeeded,
+    priceSavings, cpaAdvantage, cpcAdvantage, advantageMultiplier,
+    projection_cvr,
   };
 }
 
@@ -442,6 +499,35 @@ export default function App() {
               prefix="$"
               step="0.5"
               hint="Optional · leave 0 if you don't have one yet"
+            />
+          </div>
+        </div>
+
+        {/* Current Google Ads data (for price-change projection) */}
+        <div className="card">
+          <SectionHeader accent="var(--violet)">Current Google Ads data <span style={{ color: "var(--text-faint)", fontWeight: 400, marginLeft: 6, fontSize: 11 }}>(no rebills — your baseline)</span></SectionHeader>
+          <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 14, lineHeight: 1.5 }}>
+            Paste in what Google Ads shows you NOW at your current price (without rebills). The dashboard will project what your CPA/CPC will be at the new price below.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16, marginBottom: 16 }}>
+            <Field label="Current store price" value={inputs.currentPrice} onChange={(v) => u("currentPrice", v)} prefix="$" step="0.01" />
+            <Field label="Current CPA" value={inputs.currentCPA} onChange={(v) => u("currentCPA", v)} prefix="$" step="0.01" hint="Cost / conversion" />
+            <Field label="Current CPC" value={inputs.currentCPC} onChange={(v) => u("currentCPC", v)} prefix="$" step="0.01" hint="Cost / click" />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
+            <Field
+              label="CVR elasticity"
+              value={inputs.cvrElasticity}
+              onChange={(v) => u("cvrElasticity", Math.max(0, Math.min(2, v)))}
+              step="0.1"
+              hint="How much CVR rises when price drops · 0 = none · 0.5 = moderate · 1 = strong"
+            />
+            <Field
+              label="CPC elasticity"
+              value={inputs.cpcElasticity}
+              onChange={(v) => u("cpcElasticity", Math.max(0, Math.min(1, v)))}
+              step="0.05"
+              hint="How much CPC drops with price · 0.1 = gentle · 0.3 = steep"
             />
           </div>
         </div>
@@ -732,6 +818,135 @@ export default function App() {
             </div>
           )}
         </div>
+
+        {/* ========== PRICE CHANGE PROJECTION ========== */}
+
+        {r.projection_cvr && (
+          <div style={{
+            position: "relative",
+            background: "radial-gradient(ellipse at top right, rgba(139, 92, 246, 0.12), transparent 70%), radial-gradient(ellipse at bottom left, var(--green-glow), transparent 70%), var(--bg-elev)",
+            borderRadius: 20,
+            padding: 28,
+            border: "1px solid rgba(139, 92, 246, 0.2)",
+            marginBottom: 16,
+          }}>
+            <SectionHeader accent="var(--violet)">
+              Price change projection
+              <span style={{ color: "var(--text-faint)", fontWeight: 400, marginLeft: 6, fontSize: 11 }}>
+                · what Google likely gives at the new price
+              </span>
+            </SectionHeader>
+            <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 18, lineHeight: 1.5 }}>
+              Based on the elasticity assumption that lower prices win more conversions and cheaper clicks. Estimates, not guarantees.
+            </div>
+
+            {/* Side-by-side comparison */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 18 }}>
+              {/* CURRENT */}
+              <div style={{
+                background: "var(--bg-elev-2)",
+                border: "1px solid var(--border)",
+                borderRadius: 14,
+                padding: 20,
+              }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>
+                  Current · no rebills
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 700, color: "var(--text)", letterSpacing: "-0.02em", marginBottom: 12 }}>
+                  {fmt(r.projection_cvr.currentPrice)}
+                </div>
+                <div style={{ display: "grid", gap: 8, fontSize: 13, fontFamily: "'JetBrains Mono', monospace" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-faint)" }}>CPA</span>
+                    <span style={{ color: "var(--text)", fontWeight: 600 }}>{fmt(r.projection_cvr.currentCPA)}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-faint)" }}>CPC</span>
+                    <span style={{ color: "var(--text)", fontWeight: 600 }}>{fmt(r.projection_cvr.currentCPC)}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-faint)" }}>CVR</span>
+                    <span style={{ color: "var(--text)", fontWeight: 600 }}>{r.projection_cvr.currentCVR_pct.toFixed(2)}%</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, paddingTop: 8, borderTop: "1px solid var(--border)" }}>
+                    <span style={{ color: "var(--text-faint)" }}>Profit / cust</span>
+                    <span style={{ color: r.projection_cvr.currentProfit >= 0 ? "var(--green)" : "var(--red)", fontWeight: 700 }}>
+                      {(r.projection_cvr.currentProfit >= 0 ? "+" : "") + fmt(r.projection_cvr.currentProfit)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* NEW PROJECTED */}
+              <div style={{
+                background: "rgba(34, 197, 94, 0.05)",
+                border: "1px solid rgba(34, 197, 94, 0.3)",
+                borderRadius: 14,
+                padding: 20,
+                boxShadow: "0 0 30px var(--green-glow)",
+              }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: "var(--green)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>
+                  Projected · with rebills
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 700, color: "var(--green)", letterSpacing: "-0.02em", marginBottom: 12 }}>
+                  {fmt(r.active.price)}
+                </div>
+                <div style={{ display: "grid", gap: 8, fontSize: 13, fontFamily: "'JetBrains Mono', monospace" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-faint)" }}>CPA</span>
+                    <span style={{ color: "var(--green)", fontWeight: 600 }}>
+                      {fmt(r.projection_cvr.newCPA)}
+                      <span style={{ fontSize: 10, color: r.projection_cvr.cpaDiff > 0 ? "var(--green)" : "var(--red)", marginLeft: 6 }}>
+                        ({r.projection_cvr.cpaDiff > 0 ? "−" : "+"}{Math.abs(r.projection_cvr.cpaDiffPct).toFixed(0)}%)
+                      </span>
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-faint)" }}>CPC</span>
+                    <span style={{ color: "var(--green)", fontWeight: 600 }}>
+                      {fmt(r.projection_cvr.newCPC)}
+                      <span style={{ fontSize: 10, color: r.projection_cvr.cpcDiff > 0 ? "var(--green)" : "var(--red)", marginLeft: 6 }}>
+                        ({r.projection_cvr.cpcDiff > 0 ? "−" : "+"}{Math.abs(r.projection_cvr.cpcDiffPct).toFixed(0)}%)
+                      </span>
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-faint)" }}>CVR</span>
+                    <span style={{ color: "var(--green)", fontWeight: 600 }}>
+                      {r.projection_cvr.newCVR_pct.toFixed(2)}%
+                      <span style={{ fontSize: 10, color: r.projection_cvr.cvrDiff > 0 ? "var(--green)" : "var(--red)", marginLeft: 6 }}>
+                        ({r.projection_cvr.cvrDiff > 0 ? "+" : ""}{r.projection_cvr.cvrDiff.toFixed(2)}pp)
+                      </span>
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, paddingTop: 8, borderTop: "1px solid rgba(34, 197, 94, 0.2)" }}>
+                    <span style={{ color: "var(--text-faint)" }}>Profit / cust</span>
+                    <span style={{ color: r.projection_cvr.newProfit >= 0 ? "var(--green)" : "var(--red)", fontWeight: 700 }}>
+                      {(r.projection_cvr.newProfit >= 0 ? "+" : "") + fmt(r.projection_cvr.newProfit)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Summary callout */}
+            <div style={{
+              padding: "14px 18px",
+              background: "var(--bg-elev-2)",
+              border: "1px solid var(--border)",
+              borderRadius: 12,
+              fontSize: 13,
+              color: "var(--text)",
+              lineHeight: 1.6,
+            }}>
+              <strong style={{ color: r.projection_cvr.profitDiff >= 0 ? "var(--green)" : "var(--red)" }}>
+                {r.projection_cvr.profitDiff >= 0 ? "↑" : "↓"} {(r.projection_cvr.profitDiff >= 0 ? "+" : "") + fmt(r.projection_cvr.profitDiff)} per customer
+              </strong>{" "}
+              by moving from <strong>{fmt(r.projection_cvr.currentPrice)}</strong> (no rebills) to <strong>{fmt(r.active.price)}</strong> (with rebills). Estimated CPA drop:{" "}
+              <strong style={{ color: "var(--green)" }}>−{r.projection_cvr.cpaDiffPct.toFixed(0)}%</strong> (${r.projection_cvr.currentCPA.toFixed(2)} → ${r.projection_cvr.newCPA.toFixed(2)}).
+            </div>
+          </div>
+        )}
 
         {/* ========== PRICE OPTIONS (3 cushion levels) ========== */}
 
