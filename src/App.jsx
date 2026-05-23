@@ -16,6 +16,7 @@ const FACTORY_DEFAULTS = {
   preAlertFee: 20,
   // Google Shopping
   conversionRate: 2.0,
+  actualCPA: 0, // 0 = not provided
 };
 
 const STORAGE_KEY = "roas-calc-defaults-v3";
@@ -104,7 +105,22 @@ function calc(inputs) {
     return { roas, adSpend, profit };
   });
 
-  return { primary, scenarios, backendNet, rebillDetails, roasTable };
+  // Actual numbers (if user provided their real CPA)
+  const actualCPA = inputs.actualCPA;
+  let actual = null;
+  if (actualCPA > 0) {
+    const frontAfterAds = primary.frontEndGross - actualCPA;
+    const totalProfit = primary.totalNet - actualCPA;
+    const actualROAS = primary.price / actualCPA;
+    const vsBEROAS = actualROAS - primary.beROAS;
+    let status, statusColor;
+    if (totalProfit > 10) { status = "Profitable"; statusColor = "var(--green)"; }
+    else if (totalProfit > 0) { status = "Marginal"; statusColor = "var(--amber)"; }
+    else { status = "Bleeding"; statusColor = "var(--red)"; }
+    actual = { actualCPA, frontAfterAds, totalProfit, actualROAS, vsBEROAS, status, statusColor };
+  }
+
+  return { primary, scenarios, backendNet, rebillDetails, roasTable, actual };
 }
 
 function Field({ label, value, onChange, prefix, suffix, step = "1", hint }) {
@@ -324,6 +340,14 @@ export default function App() {
           <SectionHeader accent="var(--amber)">Google Shopping</SectionHeader>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
             <Field label="Conversion rate" value={inputs.conversionRate} onChange={(v) => u("conversionRate", v)} suffix="%" step="0.1" hint="Clicks → sales · typical 1–4%" />
+            <Field
+              label="Your actual CPA"
+              value={inputs.actualCPA}
+              onChange={(v) => u("actualCPA", v)}
+              prefix="$"
+              step="0.5"
+              hint="Optional · leave 0 if you don't have one yet"
+            />
           </div>
         </div>
 
@@ -363,6 +387,70 @@ export default function App() {
             <MiniStat label="Total / customer" value={fmt(r.primary.totalNet)} color="var(--text)" hint="front + back, pre-ads" />
           </div>
         </div>
+
+        {/* ========== YOUR ACTUAL NUMBERS (only if CPA provided) ========== */}
+
+        {r.actual && (
+          <div style={{
+            position: "relative",
+            background: r.actual.totalProfit >= 0
+              ? "radial-gradient(ellipse at top right, var(--green-glow), transparent 60%), var(--bg-elev)"
+              : "radial-gradient(ellipse at top right, rgba(239, 68, 68, 0.15), transparent 60%), var(--bg-elev)",
+            borderRadius: 20,
+            padding: 28,
+            border: `1px solid ${r.actual.statusColor}33`,
+            marginBottom: 16,
+          }}>
+            <SectionHeader
+              accent={r.actual.statusColor}
+              badge={
+                <span style={{
+                  fontSize: 10,
+                  color: r.actual.statusColor,
+                  background: `${r.actual.statusColor}15`,
+                  padding: "3px 8px",
+                  borderRadius: 6,
+                  border: `1px solid ${r.actual.statusColor}33`,
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                  marginLeft: 8,
+                }}>
+                  {r.actual.status}
+                </span>
+              }
+            >
+              Your actual numbers (at ${r.actual.actualCPA.toFixed(2)} CPA)
+            </SectionHeader>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+              <MiniStat
+                label="Profit / customer"
+                value={(r.actual.totalProfit >= 0 ? "+" : "") + fmt(r.actual.totalProfit)}
+                color={r.actual.totalProfit >= 0 ? "var(--green)" : "var(--red)"}
+                hint="after ads + backend"
+              />
+              <MiniStat
+                label="Front-end after ads"
+                value={(r.actual.frontAfterAds >= 0 ? "+" : "") + fmt(r.actual.frontAfterAds)}
+                color={r.actual.frontAfterAds >= 0 ? "var(--green)" : "var(--red)"}
+                hint="before backend kicks in"
+              />
+              <MiniStat
+                label="Your actual ROAS"
+                value={fmtX(r.actual.actualROAS)}
+                color="var(--cyan)"
+                hint={`BE is ${fmtX(r.primary.beROAS)}`}
+              />
+              <MiniStat
+                label="vs BE ROAS"
+                value={(r.actual.vsBEROAS >= 0 ? "+" : "") + r.actual.vsBEROAS.toFixed(2) + "x"}
+                color={r.actual.vsBEROAS >= 0 ? "var(--green)" : "var(--red)"}
+                hint={r.actual.vsBEROAS >= 0 ? "above breakeven" : "below breakeven"}
+              />
+            </div>
+          </div>
+        )}
 
         {/* ========== PRICE OPTIONS (3 cushion levels) ========== */}
 
@@ -483,7 +571,7 @@ export default function App() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr>
-                {["Cycle", "Active retention", "Revenue", "Net (after losses)"].map((h, i) => (
+                {["Cycle", "Still active", "Revenue", "Net (after losses)"].map((h, i) => (
                   <th key={i} style={{
                     textAlign: i === 0 ? "left" : "right",
                     padding: "8px 8px",
