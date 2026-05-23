@@ -8,7 +8,8 @@ const FACTORY_DEFAULTS = {
   // Backend rebills
   rebillPrice: 29.99,
   rebillCycles: 3,
-  stickRate: 70,
+  // Per-cycle retention: cycle 1 has biggest drop, then stabilizes
+  cycleRetention: [60, 75, 80, 85, 85, 85, 85, 85, 85, 85, 85, 85],
   chargebackRate: 10,
   refundRate: 10,
   cbFee: 25,
@@ -19,7 +20,7 @@ const FACTORY_DEFAULTS = {
   actualCPA: 0, // 0 = not provided
 };
 
-const STORAGE_KEY = "roas-calc-defaults-v3";
+const STORAGE_KEY = "roas-calc-defaults-v4";
 
 function loadDefaults() {
   try {
@@ -38,8 +39,7 @@ function roundToNineNine(raw) {
 }
 
 function computeBackendNet(inputs) {
-  const { rebillPrice, rebillCycles, stickRate, chargebackRate, refundRate, txFeeRate, cbFee, preAlertRate, preAlertFee } = inputs;
-  const stick = stickRate / 100;
+  const { rebillPrice, rebillCycles, cycleRetention, chargebackRate, refundRate, txFeeRate, cbFee, preAlertRate, preAlertFee } = inputs;
   const cbR = chargebackRate / 100;
   const refR = refundRate / 100;
   const txR = txFeeRate / 100;
@@ -49,7 +49,8 @@ function computeBackendNet(inputs) {
   let active = 1;
   const rebillDetails = [];
   for (let i = 0; i < rebillCycles; i++) {
-    active = i === 0 ? stick : active * stick;
+    const cycleRet = ((cycleRetention && cycleRetention[i]) || 75) / 100;
+    active = active * cycleRet;
     const rev = active * rebillPrice;
     const fees = rev * txR;
     const cbLoss = active * cbR * rebillPrice;
@@ -58,7 +59,7 @@ function computeBackendNet(inputs) {
     const alertCost = active * paR * preAlertFee;
     const net = rev - fees - cbLoss - cbFees - refLoss - alertCost;
     backendNet += net;
-    rebillDetails.push({ cycle: i + 1, customers: active, rev, net });
+    rebillDetails.push({ cycle: i + 1, customers: active, rev, net, cycleRet });
   }
   return { backendNet, rebillDetails };
 }
@@ -324,15 +325,41 @@ export default function App() {
 
         <div className="card">
           <SectionHeader accent="var(--cyan)">Backend (rebills)</SectionHeader>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 16 }}>
             <Field label="Rebill price" value={inputs.rebillPrice} onChange={(v) => u("rebillPrice", v)} prefix="$" step="0.01" />
-            <Field label="Rebill cycles" value={inputs.rebillCycles} onChange={(v) => u("rebillCycles", v)} step="1" />
-            <Field label="Stick rate" value={inputs.stickRate} onChange={(v) => u("stickRate", v)} suffix="%" />
+            <Field label="Rebill cycles" value={inputs.rebillCycles} onChange={(v) => u("rebillCycles", Math.max(1, Math.min(12, Math.round(v))))} step="1" />
             <Field label="Chargeback rate" value={inputs.chargebackRate} onChange={(v) => u("chargebackRate", v)} suffix="%" step="0.5" />
             <Field label="Refund rate" value={inputs.refundRate} onChange={(v) => u("refundRate", v)} suffix="%" step="0.5" />
             <Field label="Chargeback fee" value={inputs.cbFee} onChange={(v) => u("cbFee", v)} prefix="$" step="1" />
             <Field label="Pre-alert rate" value={inputs.preAlertRate} onChange={(v) => u("preAlertRate", v)} suffix="%" step="0.5" />
             <Field label="Pre-alert fee" value={inputs.preAlertFee} onChange={(v) => u("preAlertFee", v)} prefix="$" step="1" />
+          </div>
+
+          {/* Per-cycle retention */}
+          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-dim)", marginBottom: 4 }}>
+              Retention per cycle
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 12, lineHeight: 1.5 }}>
+              What % of <em>previous-cycle</em> active customers continue. Cycle 1 typically has the biggest drop (refunds, CBs, fast cancels) — later cycles stabilize.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 12 }}>
+              {Array.from({ length: inputs.rebillCycles }).map((_, i) => (
+                <Field
+                  key={i}
+                  label={`Cycle ${i + 1}`}
+                  value={inputs.cycleRetention[i] ?? 80}
+                  onChange={(v) => {
+                    const next = [...(inputs.cycleRetention || [])];
+                    while (next.length < inputs.rebillCycles) next.push(80);
+                    next[i] = v;
+                    u("cycleRetention", next);
+                  }}
+                  suffix="%"
+                  step="1"
+                />
+              ))}
+            </div>
           </div>
         </div>
 
@@ -571,7 +598,7 @@ export default function App() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr>
-                {["Cycle", "Still active", "Revenue", "Net (after losses)"].map((h, i) => (
+                {["Cycle", "Retention", "Still active", "Revenue", "Net (after losses)"].map((h, i) => (
                   <th key={i} style={{
                     textAlign: i === 0 ? "left" : "right",
                     padding: "8px 8px",
@@ -591,6 +618,9 @@ export default function App() {
                   <td style={{ padding: "12px 8px", fontFamily: "'JetBrains Mono', monospace", color: "var(--text)", borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
                     #{d.cycle}
                   </td>
+                  <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--cyan)", borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
+                    {(d.cycleRet * 100).toFixed(0)}%
+                  </td>
                   <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--text-dim)", borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
                     {(d.customers * 100).toFixed(1)}%
                   </td>
@@ -603,7 +633,7 @@ export default function App() {
                 </tr>
               ))}
               <tr style={{ background: "rgba(34, 197, 94, 0.04)" }}>
-                <td colSpan={3} style={{ padding: "14px 8px", color: "var(--green)", fontWeight: 600, fontSize: 12 }}>
+                <td colSpan={4} style={{ padding: "14px 8px", color: "var(--green)", fontWeight: 600, fontSize: 12 }}>
                   Backend total
                 </td>
                 <td style={{ padding: "14px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--green)", fontWeight: 700, fontSize: 15 }}>
