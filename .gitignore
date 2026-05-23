@@ -1,0 +1,11 @@
+node_modules
+dist
+.DS_Store
+*.log
+.env
+.env.local
+.vscode
+.idea
+# Vite writes a temp file next to vite.config.js during dev/build
+vite.config.js.timestamp-*.mjs
+vite.config.ts.timestamp-*.mjs
