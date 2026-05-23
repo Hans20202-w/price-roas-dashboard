@@ -8,12 +8,12 @@ const FACTORY_DEFAULTS = {
   // Backend rebills
   rebillPrice: 29.99,
   rebillCycles: 3,
-  // Per-cycle retention: cycle 1 has biggest drop, then stabilizes
-  cycleRetention: [60, 75, 80, 85, 85, 85, 85, 85, 85, 85, 85, 85],
-  chargebackRate: 10,
+  // Per-cycle retention
+  cycleRetention: [90, 70, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90],
+  chargebackRate: 3,
   refundRate: 10,
   cbFee: 25,
-  preAlertRate: 3,
+  preAlertRate: 10,
   preAlertFee: 20,
   // Google Shopping
   conversionRate: 2.0,
@@ -29,7 +29,7 @@ const FACTORY_DEFAULTS = {
   monthlyGoal: 100000, // target net profit per month
 };
 
-const STORAGE_KEY = "roas-calc-defaults-v4";
+const STORAGE_KEY = "roas-calc-defaults-v5";
 
 function loadDefaults() {
   try {
