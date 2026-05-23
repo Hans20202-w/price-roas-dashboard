@@ -18,6 +18,7 @@ const FACTORY_DEFAULTS = {
   // Google Shopping
   conversionRate: 2.0,
   actualCPA: 0, // 0 = not provided
+  customPrice: 0, // 0 = not set; user types their own price to compare
 };
 
 const STORAGE_KEY = "roas-calc-defaults-v4";
@@ -77,16 +78,20 @@ function calc(inputs) {
     return roundToNineNine(raw);
   };
 
-  const buildScenario = (cushionTarget, label, isPrimary) => {
-    const price = priceForCushion(cushionTarget);
-    const frontEndGross = price - cogs - price * txR; // actual cushion (may exceed target due to .99 rounding)
+  const buildScenarioFromPrice = (price, label, opts = {}) => {
+    const frontEndGross = price - cogs - price * txR;
     const totalNet = frontEndGross + backendNet;
     const beROAS = totalNet > 0 ? price / totalNet : Infinity;
     const maxCPA_total = totalNet;
     const maxCPA_frontBE = frontEndGross;
     const maxCPC_total = maxCPA_total * cvr;
     const maxCPC_frontBE = maxCPA_frontBE * cvr;
-    return { label, isPrimary, cushionTarget, price, frontEndGross, totalNet, beROAS, maxCPA_total, maxCPA_frontBE, maxCPC_total, maxCPC_frontBE };
+    return { label, ...opts, price, frontEndGross, totalNet, beROAS, maxCPA_total, maxCPA_frontBE, maxCPC_total, maxCPC_frontBE };
+  };
+
+  const buildScenario = (cushionTarget, label, isPrimary) => {
+    const price = priceForCushion(cushionTarget);
+    return buildScenarioFromPrice(price, label, { cushionTarget, isPrimary });
   };
 
   // The user's chosen scenario (primary)
@@ -98,6 +103,9 @@ function calc(inputs) {
     buildScenario(5, "Balanced (+$5 cushion)"),
     buildScenario(10, "Conservative (+$10 cushion)"),
   ];
+
+  // Custom price scenario (user-entered)
+  const custom = inputs.customPrice > 0 ? buildScenarioFromPrice(inputs.customPrice, "Your custom price") : null;
 
   // ROAS profit table at primary price — what you net at different real-world ROAS levels
   const roasTable = [0.5, 0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.5, 3.0].map((roas) => {
@@ -121,7 +129,7 @@ function calc(inputs) {
     actual = { actualCPA, frontAfterAds, totalProfit, actualROAS, vsBEROAS, status, statusColor };
   }
 
-  return { primary, scenarios, backendNet, rebillDetails, roasTable, actual };
+  return { primary, scenarios, custom, backendNet, rebillDetails, roasTable, actual };
 }
 
 function Field({ label, value, onChange, prefix, suffix, step = "1", hint }) {
@@ -212,16 +220,26 @@ function MiniStat({ label, value, color, hint }) {
 
 export default function App() {
   const [inputs, setInputs] = useState(loadDefaults);
+  // Separate "snapshot" state — results only update when user clicks Calculate
+  const [calculatedInputs, setCalculatedInputs] = useState(loadDefaults);
   const [toast, setToast] = useState(null);
-  const r = useMemo(() => calc(inputs), [inputs]);
+  const r = useMemo(() => calc(calculatedInputs), [calculatedInputs]);
 
   const u = (k, v) => setInputs((p) => ({ ...p, [k]: v }));
   const fmt = (n) => (n === Infinity ? "∞" : "$" + n.toFixed(2));
   const fmtX = (n) => (n === Infinity ? "∞" : n.toFixed(2) + "x");
 
+  // Inputs are "stale" when they differ from what was last calculated
+  const isStale = JSON.stringify(inputs) !== JSON.stringify(calculatedInputs);
+
   const showToast = (msg) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2000);
+  };
+
+  const calculate = () => {
+    setCalculatedInputs(inputs);
+    showToast("✓ Calculated");
   };
 
   const saveAsDefaults = () => {
@@ -230,9 +248,15 @@ export default function App() {
       showToast("✓ Saved as your defaults");
     } catch { showToast("⚠ Could not save"); }
   };
-  const resetToSaved = () => { setInputs(loadDefaults()); showToast("↻ Reset to saved defaults"); };
+  const resetToSaved = () => {
+    const d = loadDefaults();
+    setInputs(d);
+    setCalculatedInputs(d);
+    showToast("↻ Reset to saved defaults");
+  };
   const resetToFactory = () => {
     setInputs(FACTORY_DEFAULTS);
+    setCalculatedInputs(FACTORY_DEFAULTS);
     try { localStorage.removeItem(STORAGE_KEY); } catch {}
     showToast("↺ Reset to factory defaults");
   };
@@ -378,6 +402,59 @@ export default function App() {
           </div>
         </div>
 
+        {/* ========== CALCULATE BUTTON ========== */}
+
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 16,
+          marginBottom: 20,
+          padding: "16px 20px",
+          background: isStale ? "rgba(245, 158, 11, 0.06)" : "var(--bg-elev)",
+          border: `1px solid ${isStale ? "rgba(245, 158, 11, 0.3)" : "var(--border)"}`,
+          borderRadius: 14,
+          transition: "all 0.2s ease",
+        }}>
+          <button
+            onClick={calculate}
+            disabled={!isStale}
+            style={{
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 14,
+              fontWeight: 700,
+              letterSpacing: "0.01em",
+              padding: "12px 28px",
+              borderRadius: 10,
+              border: "none",
+              background: isStale ? "var(--green)" : "var(--bg-elev-2)",
+              color: isStale ? "#000" : "var(--text-faint)",
+              cursor: isStale ? "pointer" : "default",
+              transition: "all 0.15s ease",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              boxShadow: isStale ? "0 0 24px rgba(34, 197, 94, 0.35)" : "none",
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="9 11 12 14 22 4"></polyline>
+              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+            </svg>
+            Calculate
+          </button>
+          <div style={{ fontSize: 13, color: isStale ? "var(--amber)" : "var(--text-faint)", flex: 1 }}>
+            {isStale ? (
+              <>
+                <strong style={{ color: "var(--amber)" }}>● Inputs changed</strong> — click Calculate to update the results below.
+              </>
+            ) : (
+              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>
+                ✓ Results are up to date.
+              </span>
+            )}
+          </div>
+        </div>
+
         {/* ========== RESULTS HERO ========== */}
 
         <div style={{
@@ -409,8 +486,8 @@ export default function App() {
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
             <MiniStat label="Max CPA" value={fmt(r.primary.maxCPA_total)} color="var(--green)" hint="overall breakeven" />
-            <MiniStat label="Max CPC" value={fmt(r.primary.maxCPC_total)} color="var(--cyan)" hint={`at ${inputs.conversionRate.toFixed(1)}% CVR`} />
-            <MiniStat label="Backend net" value={fmt(r.backendNet)} color="var(--violet)" hint={`${inputs.rebillCycles} rebills`} />
+            <MiniStat label="Max CPC" value={fmt(r.primary.maxCPC_total)} color="var(--cyan)" hint={`at ${calculatedInputs.conversionRate.toFixed(1)}% CVR`} />
+            <MiniStat label="Backend net" value={fmt(r.backendNet)} color="var(--violet)" hint={`${calculatedInputs.rebillCycles} rebills`} />
             <MiniStat label="Total / customer" value={fmt(r.primary.totalNet)} color="var(--text)" hint="front + back, pre-ads" />
           </div>
         </div>
@@ -502,7 +579,7 @@ export default function App() {
             </thead>
             <tbody>
               {r.scenarios.map((s, i, arr) => {
-                const isYours = Math.abs(s.cushionTarget - inputs.frontCushion) < 0.5;
+                const isYours = Math.abs(s.cushionTarget - calculatedInputs.frontCushion) < 0.5;
                 return (
                   <tr key={i} style={{ background: isYours ? "rgba(34, 197, 94, 0.06)" : "transparent" }}>
                     <td style={{
@@ -532,10 +609,65 @@ export default function App() {
                   </tr>
                 );
               })}
+              {/* Custom price row */}
+              <tr style={{
+                background: "rgba(34, 197, 94, 0.05)",
+                borderTop: "2px solid rgba(34, 197, 94, 0.25)",
+              }}>
+                <td style={{ padding: "14px 8px", borderBottom: "none" }}>
+                  <span style={{ color: "var(--green)", fontWeight: 600, fontSize: 12 }}>
+                    ✎ Your custom price
+                  </span>
+                </td>
+                <td style={{ padding: "8px", borderBottom: "none", textAlign: "right" }}>
+                  <div style={{ display: "inline-flex", alignItems: "center", background: "var(--bg-elev-2)", borderRadius: 8, border: "1px solid var(--border-strong)", maxWidth: 110 }}>
+                    <span style={{ paddingLeft: 8, color: "var(--green)", fontFamily: "'JetBrains Mono', monospace", fontSize: 13, fontWeight: 600 }}>$</span>
+                    <input
+                      type="number"
+                      value={inputs.customPrice || ""}
+                      placeholder="0.00"
+                      onChange={(e) => u("customPrice", parseFloat(e.target.value) || 0)}
+                      step="0.01"
+                      style={{
+                        width: 70,
+                        background: "transparent",
+                        border: "none",
+                        outline: "none",
+                        color: "var(--text)",
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        padding: "8px",
+                        textAlign: "right",
+                      }}
+                    />
+                  </div>
+                </td>
+                {r.custom ? (
+                  <>
+                    <td style={{ padding: "14px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: r.custom.frontEndGross >= 0 ? "var(--green)" : "var(--red)", borderBottom: "none" }}>
+                      {fmt(r.custom.frontEndGross)}
+                    </td>
+                    <td style={{ padding: "14px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--violet)", borderBottom: "none" }}>
+                      {fmt(r.backendNet)}
+                    </td>
+                    <td style={{ padding: "14px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--cyan)", fontWeight: 600, borderBottom: "none" }}>
+                      {fmtX(r.custom.beROAS)}
+                    </td>
+                    <td style={{ padding: "14px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--amber)", borderBottom: "none" }}>
+                      {fmt(r.custom.maxCPC_total)}
+                    </td>
+                  </>
+                ) : (
+                  <td colSpan={4} style={{ padding: "14px 8px", textAlign: "center", color: "var(--text-faint)", fontSize: 11, borderBottom: "none", fontStyle: "italic" }}>
+                    Type your price → click <strong style={{ color: "var(--green)" }}>Calculate</strong>
+                  </td>
+                )}
+              </tr>
             </tbody>
           </table>
           <div style={{ marginTop: 12, fontSize: 11, color: "var(--text-faint)" }}>
-            Pick your strategy by changing the <strong style={{ color: "var(--text-dim)" }}>Front-end cushion</strong> input above.
+            Pick your strategy by changing the <strong style={{ color: "var(--text-dim)" }}>Front-end cushion</strong> input above, or type your own price in the custom row.
           </div>
         </div>
 
