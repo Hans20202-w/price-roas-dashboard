@@ -20,7 +20,7 @@ const FACTORY_DEFAULTS = {
   actualCPA: 0, // 0 = not provided
   customPrice: 0, // 0 = not set; user types their own price to compare
   // Current Google Ads data (no rebills) — for price-change projection
-  currentPrice: 199.99,
+  currentPrice: 114.99,
   currentCPA: 36.63,
   currentCPC: 1.03,
   cvrElasticity: 0.5, // how much CVR scales with price (0 = no response, 1 = inversely proportional)
