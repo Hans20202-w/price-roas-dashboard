@@ -1,11 +1,10 @@
 import { useState, useMemo } from "react";
 
 const FACTORY_DEFAULTS = {
-  // Front-end
-  sellingPrice: 69.99,
+  // Front-end inputs
   cogs: 37.56,
   txFeeRate: 7.8,
-  targetFrontMargin: 0, // breakeven front-end by default
+  frontCushion: 0, // $0 = breakeven front-end, $5 = slight cushion, $10 = comfortable
   // Backend rebills
   rebillPrice: 29.99,
   rebillCycles: 3,
@@ -19,7 +18,7 @@ const FACTORY_DEFAULTS = {
   conversionRate: 2.0,
 };
 
-const STORAGE_KEY = "roas-calc-defaults-v2";
+const STORAGE_KEY = "roas-calc-defaults-v3";
 
 function loadDefaults() {
   try {
@@ -31,24 +30,20 @@ function loadDefaults() {
   }
 }
 
-function calc(inputs) {
-  const {
-    sellingPrice, cogs, txFeeRate, targetFrontMargin,
-    rebillPrice, rebillCycles, stickRate, chargebackRate, refundRate, cbFee, preAlertRate, preAlertFee,
-    conversionRate,
-  } = inputs;
+// Round up to nearest $X.99
+function roundToNineNine(raw) {
+  const dollar = Math.floor(raw);
+  return raw <= dollar + 0.99 ? dollar + 0.99 : dollar + 1 + 0.99;
+}
 
+function computeBackendNet(inputs) {
+  const { rebillPrice, rebillCycles, stickRate, chargebackRate, refundRate, txFeeRate, cbFee, preAlertRate, preAlertFee } = inputs;
   const stick = stickRate / 100;
   const cbR = chargebackRate / 100;
   const refR = refundRate / 100;
   const txR = txFeeRate / 100;
   const paR = preAlertRate / 100;
-  const cvr = conversionRate / 100;
 
-  // Front-end: gross margin after COGS and processing fees, before ad spend
-  const frontEndGross = sellingPrice - cogs - sellingPrice * txR;
-
-  // Backend: cumulative net from rebills (after losses, fees, chargebacks, refunds, pre-alerts)
   let backendNet = 0;
   let active = 1;
   const rebillDetails = [];
@@ -64,50 +59,52 @@ function calc(inputs) {
     backendNet += net;
     rebillDetails.push({ cycle: i + 1, customers: active, rev, net });
   }
+  return { backendNet, rebillDetails };
+}
 
-  const totalNetPerCustomer = frontEndGross + backendNet;
+function calc(inputs) {
+  const { cogs, txFeeRate, frontCushion, conversionRate } = inputs;
+  const txR = txFeeRate / 100;
+  const cvr = conversionRate / 100;
 
-  // Max CPA scenarios
-  const maxCPA_breakevenTotal = totalNetPerCustomer; // overall breakeven (front bleeds OK if backend covers it)
-  const maxCPA_breakevenFront = frontEndGross; // front-end at $0, backend = pure profit
-  const targetCPA = Math.max(0, frontEndGross - targetFrontMargin); // hit your target front-end margin
+  const { backendNet, rebillDetails } = computeBackendNet(inputs);
 
-  // ROAS = revenue (selling price) / ad spend (CPA)
-  const breakevenROAS_total = sellingPrice / maxCPA_breakevenTotal;
-  const frontBreakevenROAS = sellingPrice / maxCPA_breakevenFront;
-  const targetROAS = targetCPA > 0 ? sellingPrice / targetCPA : Infinity;
+  // For a target front-end cushion C: price * (1-txR) - cogs = C  →  price = (cogs + C) / (1-txR)
+  const priceForCushion = (cushion) => {
+    const raw = (cogs + cushion) / (1 - txR);
+    return roundToNineNine(raw);
+  };
 
-  // Max CPC at given conversion rate
-  const maxCPC_target = targetCPA * cvr;
-  const maxCPC_frontBE = maxCPA_breakevenFront * cvr;
-  const maxCPC_totalBE = maxCPA_breakevenTotal * cvr;
+  const buildScenario = (cushionTarget, label, isPrimary) => {
+    const price = priceForCushion(cushionTarget);
+    const frontEndGross = price - cogs - price * txR; // actual cushion (may exceed target due to .99 rounding)
+    const totalNet = frontEndGross + backendNet;
+    const beROAS = totalNet > 0 ? price / totalNet : Infinity;
+    const maxCPA_total = totalNet;
+    const maxCPA_frontBE = frontEndGross;
+    const maxCPC_total = maxCPA_total * cvr;
+    const maxCPC_frontBE = maxCPA_frontBE * cvr;
+    return { label, isPrimary, cushionTarget, price, frontEndGross, totalNet, beROAS, maxCPA_total, maxCPA_frontBE, maxCPC_total, maxCPC_frontBE };
+  };
 
-  // Profit per customer at target CPA
-  const profitAtTargetCPA = targetFrontMargin + backendNet;
+  // The user's chosen scenario (primary)
+  const primary = buildScenario(frontCushion, `Your choice ($${frontCushion} cushion)`, true);
 
-  // CPA scenarios table
-  const cpaScenarios = [
-    { label: "Cheap clicks", cpa: targetCPA * 0.5 },
-    { label: "Comfortable", cpa: targetCPA * 0.75 },
-    { label: "Target", cpa: targetCPA, highlight: true },
-    { label: "Front-end BE", cpa: maxCPA_breakevenFront, alt: true },
-    { label: "Total BE (max)", cpa: maxCPA_breakevenTotal, danger: true },
-    { label: "Over the line", cpa: maxCPA_breakevenTotal * 1.2, danger: true, over: true },
-  ].map((s) => {
-    const frontNetAfterAds = frontEndGross - s.cpa;
-    const totalProfit = frontNetAfterAds + backendNet;
-    return { ...s, frontNetAfterAds, totalProfit };
+  // 3 reference scenarios (always shown)
+  const scenarios = [
+    buildScenario(0, "Aggressive (breakeven front)"),
+    buildScenario(5, "Balanced (+$5 cushion)"),
+    buildScenario(10, "Conservative (+$10 cushion)"),
+  ];
+
+  // ROAS profit table at primary price — what you net at different real-world ROAS levels
+  const roasTable = [0.5, 0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.5, 3.0].map((roas) => {
+    const adSpend = primary.price / roas;
+    const profit = primary.totalNet - adSpend;
+    return { roas, adSpend, profit };
   });
 
-  return {
-    frontEndGross, backendNet, totalNetPerCustomer,
-    maxCPA_breakevenTotal, maxCPA_breakevenFront, targetCPA,
-    breakevenROAS_total, frontBreakevenROAS, targetROAS,
-    maxCPC_target, maxCPC_frontBE, maxCPC_totalBE,
-    profitAtTargetCPA,
-    cpaScenarios,
-    rebillDetails,
-  };
+  return { primary, scenarios, backendNet, rebillDetails, roasTable };
 }
 
 function Field({ label, value, onChange, prefix, suffix, step = "1", hint }) {
@@ -149,11 +146,9 @@ function ResultTile({ label, value, sub, color, glow }) {
     <div style={{
       background: "var(--bg-elev-2)",
       borderRadius: 14,
-      padding: "22px 24px",
+      padding: "24px 26px",
       border: `1px solid ${color}33`,
       boxShadow: `0 0 0 1px ${color}10, 0 0 30px ${glow}`,
-      position: "relative",
-      overflow: "hidden",
     }}>
       <div style={{
         fontSize: 10,
@@ -161,17 +156,17 @@ function ResultTile({ label, value, sub, color, glow }) {
         color: color,
         textTransform: "uppercase",
         letterSpacing: "0.08em",
-        marginBottom: 8,
+        marginBottom: 10,
       }}>{label}</div>
       <div style={{
-        fontSize: 38,
+        fontSize: 44,
         fontWeight: 700,
         color: color,
         letterSpacing: "-0.03em",
         lineHeight: 1,
       }}>{value}</div>
       {sub && (
-        <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 6, fontFamily: "'JetBrains Mono', monospace" }}>
+        <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 8, fontFamily: "'JetBrains Mono', monospace" }}>
           {sub}
         </div>
       )}
@@ -216,9 +211,7 @@ export default function App() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(inputs));
       showToast("✓ Saved as your defaults");
-    } catch {
-      showToast("⚠ Could not save");
-    }
+    } catch { showToast("⚠ Could not save"); }
   };
   const resetToSaved = () => { setInputs(loadDefaults()); showToast("↻ Reset to saved defaults"); };
   const resetToFactory = () => {
@@ -261,10 +254,10 @@ export default function App() {
             WebkitTextFillColor: "transparent",
             backgroundClip: "text",
           }}>
-            Max CPA & CPC Calculator
+            Price & BE ROAS Calculator
           </h1>
           <p style={{ color: "var(--text-dim)", fontSize: 14, margin: "4px 0 0" }}>
-            How much can you spend per click and per customer while keeping the front-end at breakeven (or your target margin)? Backend rebills do the heavy lifting.
+            Enter your costs → get the price to list on Shopify and your breakeven ROAS.
           </p>
         </header>
 
@@ -297,25 +290,22 @@ export default function App() {
 
         {/* ========== INPUTS ========== */}
 
-        {/* Offer */}
         <div className="card">
-          <SectionHeader accent="var(--green)">Your offer</SectionHeader>
+          <SectionHeader accent="var(--green)">Your front-end</SectionHeader>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
-            <Field label="Google Shopping price" value={inputs.sellingPrice} onChange={(v) => u("sellingPrice", v)} prefix="$" step="0.01" hint="What customers pay" />
             <Field label="Product cost (COGS)" value={inputs.cogs} onChange={(v) => u("cogs", v)} prefix="$" step="0.01" />
             <Field label="Transaction fee" value={inputs.txFeeRate} onChange={(v) => u("txFeeRate", v)} suffix="%" step="0.1" />
             <Field
-              label="Target front-end margin"
-              value={inputs.targetFrontMargin}
-              onChange={(v) => u("targetFrontMargin", v)}
+              label="Front-end cushion"
+              value={inputs.frontCushion}
+              onChange={(v) => u("frontCushion", v)}
               prefix="$"
               step="1"
-              hint="0 = pure breakeven · 5 = slight profit"
+              hint="$0 = breakeven · $5 = slight profit · $10 = comfortable"
             />
           </div>
         </div>
 
-        {/* Backend */}
         <div className="card">
           <SectionHeader accent="var(--cyan)">Backend (rebills)</SectionHeader>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
@@ -330,9 +320,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* Shopping */}
         <div className="card">
-          <SectionHeader accent="var(--amber)">Google Shopping performance</SectionHeader>
+          <SectionHeader accent="var(--amber)">Google Shopping</SectionHeader>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
             <Field label="Conversion rate" value={inputs.conversionRate} onChange={(v) => u("conversionRate", v)} suffix="%" step="0.1" hint="Clicks → sales · typical 1–4%" />
           </div>
@@ -349,79 +338,40 @@ export default function App() {
           marginBottom: 16,
           overflow: "hidden",
         }}>
-          <SectionHeader
-            accent="var(--green)"
-            badge={
-              <span style={{
-                fontSize: 10,
-                color: "var(--text-faint)",
-                background: "var(--bg-elev-2)",
-                padding: "3px 8px",
-                borderRadius: 6,
-                border: "1px solid var(--border)",
-                fontFamily: "'JetBrains Mono', monospace",
-                marginLeft: 8,
-              }}>
-                target: ${inputs.targetFrontMargin.toFixed(0)} front-end
-              </span>
-            }
-          >
-            Your ad-spend ceiling
-          </SectionHeader>
-
+          <SectionHeader accent="var(--green)">Your results</SectionHeader>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
             <ResultTile
-              label="Max CPA per customer"
-              value={fmt(r.targetCPA)}
-              sub={`Spend up to this and still net $${r.profitAtTargetCPA.toFixed(2)}/customer`}
+              label="List your product at"
+              value={fmt(r.primary.price)}
+              sub={`Front-end nets ${fmt(r.primary.frontEndGross)} (before ads)`}
               color="var(--green)"
               glow="var(--green-glow)"
             />
             <ResultTile
-              label="Max CPC"
-              value={fmt(r.maxCPC_target)}
-              sub={`At ${inputs.conversionRate.toFixed(1)}% conversion rate`}
+              label="Your BE ROAS"
+              value={fmtX(r.primary.beROAS)}
+              sub={`Above this = profit · below = bleeding`}
               color="var(--cyan)"
               glow="var(--cyan-glow)"
             />
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, fontSize: 13 }}>
-            <MiniStat
-              label="Front-end gross"
-              value={fmt(r.frontEndGross)}
-              color={r.frontEndGross >= 0 ? "var(--green)" : "var(--red)"}
-              hint="before ad spend"
-            />
-            <MiniStat
-              label="Backend net"
-              value={fmt(r.backendNet)}
-              color="var(--cyan)"
-              hint={`${inputs.rebillCycles} rebill cycles`}
-            />
-            <MiniStat
-              label="Total / customer"
-              value={fmt(r.totalNetPerCustomer)}
-              color="var(--text)"
-              hint="front + back, no ads"
-            />
-            <MiniStat
-              label="Target ROAS"
-              value={fmtX(r.targetROAS)}
-              color="var(--amber)"
-              hint="selling price ÷ max CPA"
-            />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+            <MiniStat label="Max CPA" value={fmt(r.primary.maxCPA_total)} color="var(--green)" hint="overall breakeven" />
+            <MiniStat label="Max CPC" value={fmt(r.primary.maxCPC_total)} color="var(--cyan)" hint={`at ${inputs.conversionRate.toFixed(1)}% CVR`} />
+            <MiniStat label="Backend net" value={fmt(r.backendNet)} color="var(--violet)" hint={`${inputs.rebillCycles} rebills`} />
+            <MiniStat label="Total / customer" value={fmt(r.primary.totalNet)} color="var(--text)" hint="front + back, pre-ads" />
           </div>
         </div>
 
-        {/* ========== CPA SCENARIOS TABLE ========== */}
+        {/* ========== PRICE OPTIONS (3 cushion levels) ========== */}
 
         <div className="card">
-          <SectionHeader accent="var(--violet)">CPA scenarios — what happens if you pay…</SectionHeader>
+          <SectionHeader accent="var(--violet)">Price options by front-end cushion</SectionHeader>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr>
-                {["", "CPA", "Front-end after ads", "Total profit / cust", "ROAS"].map((h, i) => (
+                {["Strategy", "Price", "Front cushion", "Backend net", "BE ROAS", "Max CPC"].map((h, i) => (
                   <th key={i} style={{
                     textAlign: i === 0 ? "left" : "right",
                     padding: "8px 8px",
@@ -436,111 +386,88 @@ export default function App() {
               </tr>
             </thead>
             <tbody>
-              {r.cpaScenarios.map((s, i) => {
-                const roas = s.cpa > 0 ? inputs.sellingPrice / s.cpa : Infinity;
+              {r.scenarios.map((s, i, arr) => {
+                const isYours = Math.abs(s.cushionTarget - inputs.frontCushion) < 0.5;
                 return (
-                  <tr key={i} style={{
-                    background: s.highlight ? "rgba(34, 197, 94, 0.06)" : s.alt ? "rgba(245, 158, 11, 0.04)" : s.danger ? "rgba(239, 68, 68, 0.04)" : "transparent",
-                  }}>
+                  <tr key={i} style={{ background: isYours ? "rgba(34, 197, 94, 0.06)" : "transparent" }}>
                     <td style={{
                       padding: "12px 8px",
-                      borderBottom: i < r.cpaScenarios.length - 1 ? "1px solid var(--border)" : "none",
-                      color: s.highlight ? "var(--green)" : s.alt ? "var(--amber)" : s.danger ? "var(--red)" : "var(--text)",
-                      fontWeight: 500,
+                      color: isYours ? "var(--green)" : "var(--text)",
+                      fontWeight: isYours ? 600 : 500,
                       fontSize: 12,
-                    }}>
-                      {s.highlight ? "● " : s.alt ? "◆ " : s.over ? "✕ " : s.danger ? "▲ " : "  "}{s.label}
-                    </td>
-                    <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--text)", borderBottom: i < r.cpaScenarios.length - 1 ? "1px solid var(--border)" : "none" }}>
-                      {fmt(s.cpa)}
-                    </td>
-                    <td style={{
-                      padding: "12px 8px",
-                      textAlign: "right",
-                      fontFamily: "'JetBrains Mono', monospace",
-                      color: s.frontNetAfterAds >= 0 ? "var(--green)" : "var(--red)",
-                      borderBottom: i < r.cpaScenarios.length - 1 ? "1px solid var(--border)" : "none",
-                    }}>
-                      {s.frontNetAfterAds >= 0 ? "+" : ""}{fmt(s.frontNetAfterAds)}
-                    </td>
-                    <td style={{
-                      padding: "12px 8px",
-                      textAlign: "right",
-                      fontFamily: "'JetBrains Mono', monospace",
-                      color: s.totalProfit >= 0 ? "var(--green)" : "var(--red)",
-                      fontWeight: 600,
-                      borderBottom: i < r.cpaScenarios.length - 1 ? "1px solid var(--border)" : "none",
-                    }}>
-                      {s.totalProfit >= 0 ? "+" : ""}{fmt(s.totalProfit)}
-                    </td>
-                    <td style={{
-                      padding: "12px 8px",
-                      textAlign: "right",
-                      fontFamily: "'JetBrains Mono', monospace",
-                      color: "var(--amber)",
-                      borderBottom: i < r.cpaScenarios.length - 1 ? "1px solid var(--border)" : "none",
-                    }}>
-                      {fmtX(roas)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <div style={{ marginTop: 14, fontSize: 11, color: "var(--text-faint)", lineHeight: 1.6 }}>
-            <div><span style={{ color: "var(--green)" }}>●</span> Target — front-end nets ${inputs.targetFrontMargin.toFixed(0)}, full backend on top.</div>
-            <div><span style={{ color: "var(--amber)" }}>◆</span> Front-end breakeven — backend = pure profit.</div>
-            <div><span style={{ color: "var(--red)" }}>▲</span> Total breakeven — front-end bleeds, backend just covers it. No profit.</div>
-            <div><span style={{ color: "var(--red)" }}>✕</span> Over the line — losing money even with backend.</div>
-          </div>
-        </div>
-
-        {/* ========== CPC SCENARIOS ========== */}
-
-        <div className="card">
-          <SectionHeader accent="var(--cyan)">Max CPC by conversion rate</SectionHeader>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr>
-                {["Conv rate", `Max CPC (target $${inputs.targetFrontMargin.toFixed(0)})`, "Max CPC (front BE)", "Max CPC (total BE)"].map((h, i) => (
-                  <th key={i} style={{
-                    textAlign: i === 0 ? "left" : "right",
-                    padding: "8px 8px",
-                    color: "var(--text-faint)",
-                    fontSize: 10,
-                    fontWeight: 600,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.06em",
-                    borderBottom: "1px solid var(--border)",
-                  }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {[1, 1.5, 2, 2.5, 3, 4, 5].map((cvrPct, i, arr) => {
-                const cvr = cvrPct / 100;
-                const current = Math.abs(cvrPct - inputs.conversionRate) < 0.01;
-                return (
-                  <tr key={cvrPct} style={{
-                    background: current ? "rgba(6, 182, 212, 0.06)" : "transparent",
-                  }}>
-                    <td style={{
-                      padding: "12px 8px",
-                      fontFamily: "'JetBrains Mono', monospace",
-                      color: current ? "var(--cyan)" : "var(--text)",
-                      fontWeight: current ? 600 : 400,
                       borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none",
                     }}>
-                      {current ? "● " : "  "}{cvrPct.toFixed(1)}%
+                      {isYours ? "● " : "  "}{s.label}
                     </td>
-                    <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--green)", fontWeight: 600, borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
-                      {fmt(r.targetCPA * cvr)}
+                    <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--text)", fontWeight: 600, borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
+                      {fmt(s.price)}
+                    </td>
+                    <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--green)", borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
+                      {fmt(s.frontEndGross)}
+                    </td>
+                    <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--violet)", borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
+                      {fmt(r.backendNet)}
+                    </td>
+                    <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--cyan)", fontWeight: 600, borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
+                      {fmtX(s.beROAS)}
                     </td>
                     <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--amber)", borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
-                      {fmt(r.maxCPA_breakevenFront * cvr)}
+                      {fmt(s.maxCPC_total)}
                     </td>
-                    <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--text-dim)", borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
-                      {fmt(r.maxCPA_breakevenTotal * cvr)}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div style={{ marginTop: 12, fontSize: 11, color: "var(--text-faint)" }}>
+            Pick your strategy by changing the <strong style={{ color: "var(--text-dim)" }}>Front-end cushion</strong> input above.
+          </div>
+        </div>
+
+        {/* ========== ROAS SCENARIOS ========== */}
+
+        <div className="card">
+          <SectionHeader accent="var(--amber)">
+            Profit at different ROAS levels
+            <span style={{ color: "var(--text-faint)", fontWeight: 400, marginLeft: 6, fontSize: 12 }}>
+              (at {fmt(r.primary.price)})
+            </span>
+          </SectionHeader>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr>
+                {["ROAS", "Ad spend / cust", "Profit / cust", ""].map((h, i) => (
+                  <th key={i} style={{
+                    textAlign: i === 0 ? "left" : i === 3 ? "left" : "right",
+                    padding: "8px 8px",
+                    color: "var(--text-faint)",
+                    fontSize: 10,
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.06em",
+                    borderBottom: "1px solid var(--border)",
+                  }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {r.roasTable.map((row, i, arr) => {
+                const isBE = Math.abs(row.roas - r.primary.beROAS) < 0.15;
+                const status = row.profit > 15 ? "healthy" : row.profit > 0 ? "marginal" : "bleeding";
+                const statusColor = row.profit > 15 ? "var(--green)" : row.profit > 0 ? "var(--amber)" : "var(--red)";
+                return (
+                  <tr key={i} style={{ background: isBE ? "rgba(6, 182, 212, 0.06)" : "transparent" }}>
+                    <td style={{ padding: "12px 8px", fontFamily: "'JetBrains Mono', monospace", color: isBE ? "var(--cyan)" : "var(--text)", fontWeight: isBE ? 600 : 400, borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
+                      {isBE ? "● " : "  "}{row.roas.toFixed(1)}x{isBE ? " (≈BE)" : ""}
+                    </td>
+                    <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--amber)", borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
+                      {fmt(row.adSpend)}
+                    </td>
+                    <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: row.profit >= 0 ? "var(--green)" : "var(--red)", fontWeight: 600, borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
+                      {row.profit >= 0 ? "+" : ""}{fmt(row.profit)}
+                    </td>
+                    <td style={{ padding: "12px 8px", fontSize: 11, color: statusColor, borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
+                      ● {status}
                     </td>
                   </tr>
                 );
@@ -549,9 +476,10 @@ export default function App() {
           </table>
         </div>
 
-        {/* Rebill cycle breakdown */}
+        {/* ========== REBILL BREAKDOWN ========== */}
+
         <div className="card">
-          <SectionHeader accent="var(--violet)">Rebill cycle breakdown (per customer)</SectionHeader>
+          <SectionHeader accent="var(--cyan)">Rebill cycle breakdown</SectionHeader>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr>
